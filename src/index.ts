@@ -43,13 +43,14 @@ const client = new Client({
 const memberCommands = [
   "level top, rank [@user]",
   "status [@user], setbio <text|clear>",
-  "afk [reason], prof [@user], banner [@user], snipe",
-  "daily, rep @user, leaderboard rep",
+  "afk [reason], prof [@user], banner [@user], snipe [@user]",
+  "daily, rep @user|top, lb rep",
   "birthday set <month> <day>, birthday clear",
   "stats, ping, help",
 ];
 const serverManagementCommands = [
   "welcome #channel | message, welcome off",
+  "leave #channel | message, leave off",
   "autorole @role, autorole off",
   "logs #channel, logs off",
   "level enable|disable",
@@ -70,6 +71,9 @@ const moderationCommands = [
   "timeout @user <minutes> [reason], mute @user <minutes> [reason]",
   "warn @user <reason>, warnings @user, clear <1-100>",
   "lock [#channel], unlock [#channel]",
+];
+const botOwnerCommands = [
+  "level max @user",
 ];
 const botOwnerIds = new Set<string>();
 let botOwnerLookup: Promise<void> | undefined;
@@ -125,14 +129,15 @@ function formatDuration(milliseconds: number): string {
 const xpCooldowns = new Map<string, number>();
 const voiceSessions = new Map<string, number>();
 const inviteUses = new Map<string, Map<string, number>>();
-const snipedMessages = new Map<string, {
+type SnipedMessage = {
   authorTag: string;
   authorId: string;
   avatarUrl: string;
   content: string;
   createdAt: number;
   attachments: string[];
-}>();
+};
+const snipedMessages = new Map<string, SnipedMessage[]>();
 
 function parseDuration(input: string | undefined): number | undefined {
   const match = input?.match(/^(\d+)(s|m|h|d)$/i);
@@ -221,6 +226,16 @@ async function handleCommand(message: Message): Promise<void> {
       await message.reply(`Daily reward claimed! Streak: **${claim.streak}** day${claim.streak === 1 ? "" : "s"}. You earned **${baseXp} XP**.${milestoneText}`);
       return;
     }
+    const showRepLeaderboard = ((command === "lb" || command === "leaderboard") && args[0]?.toLowerCase() === "rep")
+      || (command === "rep" && args[0]?.toLowerCase() === "top");
+    if (showRepLeaderboard) {
+      const leaders = await database.getReputationLeaderboard(guildId);
+      const description = leaders.length
+        ? leaders.map((entry, index) => `**${index + 1}.** <@${entry.userId}> - **${entry.points}** rep`).join("\n")
+        : "No reputation has been awarded yet.";
+      await message.reply({ embeds: [new EmbedBuilder().setColor(0x55c278).setTitle("Most helpful members").setDescription(description)] });
+      return;
+    }
     if (command === "rep") {
       const target = await resolveMember(message, args[0]);
       if (!target) {
@@ -237,14 +252,6 @@ async function handleCommand(message: Message): Promise<void> {
         return;
       }
       await message.reply(`${target} received a reputation point from ${message.author}. They now have **${result.points}** rep.`);
-      return;
-    }
-    if (command === "leaderboard" && args[0]?.toLowerCase() === "rep") {
-      const leaders = await database.getReputationLeaderboard(guildId);
-      const description = leaders.length
-        ? leaders.map((entry, index) => `**${index + 1}.** <@${entry.userId}> - **${entry.points}** rep`).join("\n")
-        : "No reputation has been awarded yet.";
-      await message.reply({ embeds: [new EmbedBuilder().setColor(0x55c278).setTitle("Most helpful members").setDescription(description)] });
       return;
     }
     if (command === "birthday") {
@@ -313,6 +320,12 @@ async function handleCommand(message: Message): Promise<void> {
         sections.push({
           name: "Moderation commands",
           value: moderationCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
+        });
+      }
+      if (botOwnerIds.has(message.author.id)) {
+        sections.push({
+          name: "Bot owner commands",
+          value: botOwnerCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
         });
       }
       const embed = new EmbedBuilder()
@@ -456,9 +469,15 @@ async function handleCommand(message: Message): Promise<void> {
       return;
     }
     if (command === "snipe") {
-      const deleted = snipedMessages.get(message.channelId);
+      const target = message.mentions.users.first();
+      const recentMessages = snipedMessages.get(message.channelId) ?? [];
+      const deleted = target
+        ? recentMessages.find((entry) => entry.authorId === target.id)
+        : recentMessages[0];
       if (!deleted) {
-        await message.reply("There is no recently deleted message to snipe in this channel.");
+        await message.reply(target
+          ? `I haven't cached a recently deleted message from ${target} in this channel.`
+          : "There is no recently deleted message to snipe in this channel.");
         return;
       }
       const embed = new EmbedBuilder()
@@ -535,9 +554,12 @@ async function handleCommand(message: Message): Promise<void> {
       return;
     }
 
-    if (["welcome", "autorole", "logs", "level", "alerts", "automod"].includes(command)) {
+    if (["welcome", "leave", "autorole", "logs", "level", "alerts", "automod"].includes(command)) {
       const publicLevelCommand = command === "level" && args[0]?.toLowerCase() === "top";
-      if (!publicLevelCommand && !hasPermission(message, PermissionsBitField.Flags.ManageGuild)) {
+      const botOwnerLevelCommand = command === "level" && args[0]?.toLowerCase() === "max";
+      if (botOwnerLevelCommand) await loadBotOwnerIds();
+      const canSetMaxLevel = botOwnerLevelCommand && botOwnerIds.has(message.author.id);
+      if (!publicLevelCommand && !canSetMaxLevel && !hasPermission(message, PermissionsBitField.Flags.ManageGuild)) {
         await message.reply("You need **Manage Server** to change bot settings.");
         return;
       }
@@ -557,6 +579,26 @@ async function handleCommand(message: Message): Promise<void> {
         await database.setSetting(guildId, "welcome_channel_id", channel.id);
         await database.setSetting(guildId, "welcome_message", welcomeText || "Welcome {user} to {server}!");
         await message.reply(`Welcome messages will be sent to ${channel}. Use \`{user}\` and \`{server}\` in the message.`);
+        return;
+      }
+      if (command === "leave") {
+        if (args[0]?.toLowerCase() === "off") {
+          await database.setSetting(guildId, "leave_channel_id", null);
+          await message.reply("Leave messages are disabled.");
+          return;
+        }
+        const channel = message.mentions.channels.first();
+        if (!channel?.isTextBased()) {
+          await message.reply(`Usage: \`${PREFIX}leave #channel | See ya! {user} Thankyou for memories. GOODBYE\` or \`${PREFIX}leave off\``);
+          return;
+        }
+        const input = args.join(" ");
+        const leaveText = input.includes("|")
+          ? input.slice(input.indexOf("|") + 1).trim()
+          : "See ya! {user} Thankyou for memories. GOODBYE";
+        await database.setSetting(guildId, "leave_channel_id", channel.id);
+        await database.setSetting(guildId, "leave_message", leaveText || "See ya! {user} Thankyou for memories. GOODBYE");
+        await message.reply(`Leave embeds will be sent to ${channel}. Use \`{user}\` and \`{server}\` in the caption.`);
         return;
       }
       if (command === "autorole") {
@@ -591,6 +633,20 @@ async function handleCommand(message: Message): Promise<void> {
       }
       if (command === "level") {
         const action = args[0]?.toLowerCase();
+        if (action === "max") {
+          if (!botOwnerIds.has(message.author.id)) {
+            await message.reply("Only the bot owner can use `,level max`.");
+            return;
+          }
+          const target = await resolveMember(message, args[1]);
+          if (!target) {
+            await message.reply(`Usage: \`${PREFIX}level max @user\``);
+            return;
+          }
+          await database.setXp(guildId, target.id, 1_000_000);
+          await message.reply(`${target} was set to level 100.`);
+          return;
+        }
         if (action === "top") {
           const leaderboard = await database.getLeaderboard(guildId);
           await message.reply({
@@ -1044,8 +1100,25 @@ client.on(Events.GuildMemberAdd, async (member) => {
   await sendLog(member.guild.id, "Member joined", `${member.user.tag} joined the server.`);
 });
 
-client.on(Events.GuildMemberRemove, (member) => {
+client.on(Events.GuildMemberRemove, async (member) => {
   void database.recordMemberChange(member.guild.id, "leaves").catch((error) => console.error("Leave tracking failed:", error));
+  const settings = await database.getSettings(member.guild.id).catch(() => null);
+  if (typeof settings?.leave_channel_id === "string") {
+    const channel = await client.channels.fetch(settings.leave_channel_id).catch(() => null);
+    if (channel?.isSendable()) {
+      const template = typeof settings.leave_message === "string"
+        ? settings.leave_message
+        : "See ya! {user} Thankyou for memories. GOODBYE";
+      const caption = template.replaceAll("{user}", `${member}`).replaceAll("{server}", member.guild.name).slice(0, 4000);
+      const embed = new EmbedBuilder()
+        .setColor(0xe56b6f)
+        .setDescription(caption)
+        .setThumbnail(member.displayAvatarURL({ size: 512 }))
+        .addFields({ name: "Server Statistics", value: `Total members: ${member.guild.memberCount}` })
+        .setTimestamp();
+      await channel.send({ embeds: [embed] }).catch((error) => console.error("Leave embed failed:", error));
+    }
+  }
   void sendLog(member.guild.id, "Member left", `${member.user.tag} left the server.`);
 });
 
@@ -1075,7 +1148,8 @@ client.on(Events.ChannelDelete, (channel) => {
 client.on(Events.MessageDelete, (message) => {
   if (message.guild && !message.author?.bot) {
     if (message.author) {
-      snipedMessages.set(message.channelId, {
+      const recentMessages = snipedMessages.get(message.channelId) ?? [];
+      recentMessages.unshift({
         authorTag: message.author.tag,
         authorId: message.author.id,
         avatarUrl: message.author.displayAvatarURL(),
@@ -1083,6 +1157,8 @@ client.on(Events.MessageDelete, (message) => {
         createdAt: message.createdTimestamp,
         attachments: [...message.attachments.values()].map((attachment) => attachment.url),
       });
+      if (recentMessages.length > 25) recentMessages.length = 25;
+      snipedMessages.set(message.channelId, recentMessages);
     }
     void sendLog(message.guild.id, "Message deleted", `A message by ${message.author ?? "an unknown user"} was deleted in <#${message.channelId}>.\n${message.content?.slice(0, 1000) || "Message content unavailable."}`);
   }

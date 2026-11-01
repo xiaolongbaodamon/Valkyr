@@ -29,6 +29,7 @@ All commands start with a comma. `,help` shows member commands to everyone; only
 | `,help`, `,ping`, `,stats`, `,status [@user]` | Server stats and a member profile with account age, server tenure, tracked words/commands, voice time, and XP-earned level title |
 | `,setbio <text>`, `,setbio clear` | Set or clear the personal bio shown on your `,status` card (up to 300 characters) |
 | `,welcome #channel | message`, `,welcome off` | Configure the welcome embed; supports `{user}` and `{server}`, account age, invite attribution, and member count |
+| `,leave #channel | message`, `,leave off` | Configure the member-leave embed; default caption: “See ya! {user} Thankyou for memories. GOODBYE” |
 | `,autorole @role`, `,autorole off` | Assign a role to new members |
 | `,logs #channel`, `,logs off` | Log joins, leaves, message edits/deletions, voice moves, and moderation |
 | `,kick @user [reason]`, `,ban @user [reason]`, `,softban @user [reason]`, `,timeout @user <minutes> [reason]`, `,mute @user <minutes> [reason]` | Moderation actions |
@@ -38,13 +39,13 @@ All commands start with a comma. `,help` shows member commands to everyone; only
 | `,level reward <level> @role` | Award a role on reaching a level |
 | `,level ignore-channel|allow-channel #channel`, `,level ignore-role|allow-role @role` | Exclude or restore XP sources |
 | `,daily` | Claim 50 XP every 24 hours; one-time streak bonuses: +200 XP at 7 days, +500 at 30, +1000 at 100 |
-| `,rep @user`, `,leaderboard rep` | Give one reputation point per member every 24 hours; view the helpful-member leaderboard |
+| `,rep @user`, `,rep top`, `,lb rep` | Give reputation or view the helpful-member leaderboard (legacy `,leaderboard rep` remains supported) |
 | `,birthday set <month> <day>`, `,birthday clear` | Save or remove your annual birthday |
 | `,birthday channel #channel|off` | Set the server's birthday announcement channel (Manage Server required) |
 | `,automod enable|disable` | Enable Discord spam filtering and Valkyr attachment/poll filtering |
 | `,afk [reason]` | Set an AFK status, clear it on your next message, and notify people who mention you |
 | `,prof [@user]`, `,banner [@user]` | Show a large profile embed or the user's Discord banner |
-| `,snipe` | Recreate the latest cached deleted message in the current channel |
+| `,snipe [@user]` | Recreate the latest cached deleted message in the channel, optionally filtered to one user |
 | `,giveaway start <30s|10m|2h|1d> <prize>`, `,giveaway reroll` | Run a button-entry giveaway and choose/reroll a winner |
 | `,role add @role [label]` | Post a safe self-assign role button |
 | `,ticket setup @support-role` | Post a ticket panel; tickets are private to the member and support role |

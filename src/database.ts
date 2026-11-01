@@ -60,6 +60,8 @@ export class Database {
         guild_id TEXT PRIMARY KEY,
         welcome_channel_id TEXT,
         welcome_message TEXT NOT NULL DEFAULT 'Welcome {user} to {server}!',
+        leave_channel_id TEXT,
+        leave_message TEXT NOT NULL DEFAULT 'See ya! {user} Thankyou for memories. GOODBYE',
         autorole_id TEXT,
         log_channel_id TEXT,
         ticket_support_role_id TEXT,
@@ -205,6 +207,12 @@ export class Database {
     if (!existingColumns.has("birthday_channel_id")) {
       await this.client.execute("ALTER TABLE guild_settings ADD COLUMN birthday_channel_id TEXT");
     }
+    if (!existingColumns.has("leave_channel_id")) {
+      await this.client.execute("ALTER TABLE guild_settings ADD COLUMN leave_channel_id TEXT");
+    }
+    if (!existingColumns.has("leave_message")) {
+      await this.client.execute("ALTER TABLE guild_settings ADD COLUMN leave_message TEXT NOT NULL DEFAULT 'See ya! {user} Thankyou for memories. GOODBYE'");
+    }
     const memberMetricColumns = await this.client.execute("PRAGMA table_info(member_metrics)");
     if (!memberMetricColumns.rows.some((row) => valueAsString(row.name) === "bio")) {
       await this.client.execute("ALTER TABLE member_metrics ADD COLUMN bio TEXT");
@@ -232,6 +240,8 @@ export class Database {
     const allowed = new Set([
       "welcome_channel_id",
       "welcome_message",
+      "leave_channel_id",
+      "leave_message",
       "autorole_id",
       "log_channel_id",
       "ticket_support_role_id",
@@ -442,6 +452,14 @@ export class Database {
       args: [guildId, userId],
     });
     return valueAsNumber(result.rows[0]?.xp);
+  }
+
+  async setXp(guildId: string, userId: string, xp: number): Promise<void> {
+    await this.client.execute({
+      sql: `INSERT INTO member_xp (guild_id, user_id, xp) VALUES (?, ?, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET xp = excluded.xp`,
+      args: [guildId, userId, xp],
+    });
   }
 
   async setLevelReward(guildId: string, level: number, roleId: string): Promise<void> {
