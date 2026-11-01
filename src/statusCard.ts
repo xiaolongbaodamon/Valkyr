@@ -16,7 +16,7 @@ export type StatusCardData = {
   voiceTime: string;
   accentColor: string;
   font: "sans" | "serif" | "mono";
-  backgroundBase64: string | null;
+  backgroundData: ArrayBuffer | null;
 };
 
 const width = 1100;
@@ -63,13 +63,21 @@ function wrapText(
   if (line && lineCount < maxLines) context.fillText(line, x, y + lineCount * lineHeight, maxWidth);
 }
 
+export async function optimizeStatusBackground(imageData: Buffer): Promise<Buffer> {
+  const image = await loadImage(imageData);
+  const canvas = createCanvas(width, height);
+  const context = canvas.getContext("2d");
+  drawCover(context, image);
+  return canvas.toBuffer("image/webp", 0.78);
+}
+
 export async function renderStatusCard(data: StatusCardData): Promise<Buffer> {
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
   let hasBackground = false;
-  if (data.backgroundBase64) {
+  if (data.backgroundData) {
     try {
-      const image = await loadImage(Buffer.from(data.backgroundBase64, "base64"));
+      const image = await loadImage(Buffer.from(data.backgroundData));
       drawCover(context, image);
       hasBackground = true;
     } catch (error) {

@@ -56,7 +56,7 @@ export type SiblingRequest = {
 export type StatusCustomization = {
   color: string;
   font: "sans" | "serif" | "mono";
-  backgroundBase64: string | null;
+  backgroundData: ArrayBuffer | null;
 };
 
 function valueAsString(value: unknown): string {
@@ -65,6 +65,14 @@ function valueAsString(value: unknown): string {
 
 function valueAsNumber(value: unknown): number {
   return typeof value === "number" || typeof value === "bigint" ? Number(value) : 0;
+}
+
+function valueAsArrayBuffer(value: unknown): ArrayBuffer | null {
+  if (value instanceof ArrayBuffer) return value;
+  if (ArrayBuffer.isView(value)) {
+    return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+  }
+  return null;
 }
 
 export class Database {
@@ -146,7 +154,7 @@ export class Database {
         user_id TEXT NOT NULL,
         color TEXT NOT NULL DEFAULT '#55c278',
         font TEXT NOT NULL DEFAULT 'sans',
-        background_base64 TEXT,
+        background_data BLOB,
         PRIMARY KEY (guild_id, user_id)
       )`,
       `CREATE TABLE IF NOT EXISTS alert_sources (
@@ -250,6 +258,24 @@ export class Database {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CHECK (requester_id != target_id)
       )`,
+      `CREATE TABLE IF NOT EXISTS family_adoption_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        parent_id TEXT NOT NULL,
+        child_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (parent_id != child_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS family_adoption_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        parent_id TEXT NOT NULL,
+        child_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (parent_id != child_id)
+      )`,
       `CREATE TABLE IF NOT EXISTS family_names (
         guild_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
@@ -278,6 +304,24 @@ export class Database {
     const memberMetricColumns = await this.client.execute("PRAGMA table_info(member_metrics)");
     if (!memberMetricColumns.rows.some((row) => valueAsString(row.name) === "bio")) {
       await this.client.execute("ALTER TABLE member_metrics ADD COLUMN bio TEXT");
+    }
+    const statusColumns = await this.client.execute("PRAGMA table_info(status_customizations)");
+    const statusColumnNames = new Set(statusColumns.rows.map((row) => valueAsString(row.name)));
+    if (!statusColumnNames.has("background_data")) {
+      await this.client.execute("ALTER TABLE status_customizations ADD COLUMN background_data BLOB");
+    }
+    if (statusColumnNames.has("background_base64")) {
+      const legacyBackgrounds = await this.client.execute(
+        "SELECT guild_id, user_id, background_base64 FROM status_customizations WHERE background_base64 IS NOT NULL AND background_base64 != ''",
+      );
+      for (const row of legacyBackgrounds.rows) {
+        const oldData = Buffer.from(valueAsString(row.background_base64), "base64");
+        const newData = Uint8Array.from(oldData).buffer;
+        await this.client.execute({
+          sql: "UPDATE status_customizations SET background_data = ?, background_base64 = NULL WHERE guild_id = ? AND user_id = ?",
+          args: [newData, valueAsString(row.guild_id), valueAsString(row.user_id)],
+        });
+      }
     }
   }
 
@@ -634,7 +678,7 @@ export class Database {
 
   async getStatusCustomization(guildId: string, userId: string): Promise<StatusCustomization> {
     const result = await this.client.execute({
-      sql: "SELECT color, font, background_base64 FROM status_customizations WHERE guild_id = ? AND user_id = ?",
+      sql: "SELECT color, font, background_data FROM status_customizations WHERE guild_id = ? AND user_id = ?",
       args: [guildId, userId],
     });
     const row = result.rows[0];
@@ -642,19 +686,19 @@ export class Database {
     return {
       color: /^#[0-9a-f]{6}$/i.test(valueAsString(row?.color)) ? valueAsString(row?.color) : "#55c278",
       font: font === "serif" || font === "mono" ? font : "sans",
-      backgroundBase64: typeof row?.background_base64 === "string" ? row.background_base64 : null,
+      backgroundData: valueAsArrayBuffer(row?.background_data),
     };
   }
 
   async setStatusCustomization(guildId: string, userId: string, customization: StatusCustomization): Promise<void> {
     await this.client.execute({
-      sql: `INSERT INTO status_customizations (guild_id, user_id, color, font, background_base64)
+      sql: `INSERT INTO status_customizations (guild_id, user_id, color, font, background_data)
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
           color = excluded.color,
           font = excluded.font,
-          background_base64 = excluded.background_base64`,
-      args: [guildId, userId, customization.color, customization.font, customization.backgroundBase64],
+          background_data = excluded.background_data`,
+      args: [guildId, userId, customization.color, customization.font, customization.backgroundData],
     });
   }
 
@@ -866,6 +910,56 @@ export class Database {
     });
     const messageId = valueAsString(result.rows[0]?.message_id);
     return messageId ? this.getGiveaway(messageId) : undefined;
+  }
+
+  async createFamilyAdoptionRequest(guildId: string, parentId: string, childId: string): Promise<number | undefined> {
+    if (parentId === childId) return undefined;
+    const pending = await this.client.execute({
+      sql: "SELECT 1 FROM family_adoption_requests WHERE guild_id = ? AND parent_id = ? AND child_id = ? AND status = 'pending'",
+      args: [guildId, parentId, childId],
+    });
+    if (pending.rows.length) return undefined;
+    const result = await this.client.execute({
+      sql: "INSERT INTO family_adoption_requests (guild_id, parent_id, child_id) VALUES (?, ?, ?) RETURNING id",
+      args: [guildId, parentId, childId],
+    });
+    return valueAsNumber(result.rows[0]?.id) || undefined;
+  }
+
+  async respondToFamilyAdoptionRequest(
+    guildId: string,
+    requestId: number,
+    childId: string,
+    accept: boolean,
+  ): Promise<"accepted" | "declined" | "missing" | "not-target" | "limit" | "cycle"> {
+    const result = await this.client.execute({
+      sql: "SELECT parent_id, child_id FROM family_adoption_requests WHERE id = ? AND guild_id = ? AND status = 'pending'",
+      args: [requestId, guildId],
+    });
+    const row = result.rows[0];
+    if (!row) return "missing";
+    if (valueAsString(row.child_id) !== childId) return "not-target";
+    if (!accept) {
+      await this.client.execute({
+        sql: "UPDATE family_adoption_requests SET status = 'declined' WHERE id = ? AND guild_id = ? AND status = 'pending'",
+        args: [requestId, guildId],
+      });
+      return "declined";
+    }
+    const parentId = valueAsString(row.parent_id);
+    const resultStatus = await this.addFamilyParent(guildId, parentId, childId);
+    if (resultStatus === "limit" || resultStatus === "cycle") {
+      await this.client.execute({
+        sql: "UPDATE family_adoption_requests SET status = 'invalid' WHERE id = ? AND guild_id = ? AND status = 'pending'",
+        args: [requestId, guildId],
+      });
+      return resultStatus;
+    }
+    await this.client.execute({
+      sql: "UPDATE family_adoption_requests SET status = 'accepted' WHERE id = ? AND guild_id = ? AND status = 'pending'",
+      args: [requestId, guildId],
+    });
+    return "accepted";
   }
 
   async addFamilyParent(guildId: string, parentId: string, childId: string): Promise<"added" | "already" | "limit" | "cycle"> {

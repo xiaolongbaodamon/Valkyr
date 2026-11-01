@@ -19,8 +19,9 @@ import {
 import { startAlertPolling } from "./alerts.js";
 import { config, PREFIX, validateConfig } from "./config.js";
 import { Database, type AlertPlatform, type Giveaway } from "./database.js";
+import { renderFamilyTree, type FamilyTreeEdge, type FamilyTreeMember } from "./familyTreeCard.js";
 import { getLevelTitle } from "./levelTitles.js";
-import { renderStatusCard } from "./statusCard.js";
+import { optimizeStatusBackground, renderStatusCard } from "./statusCard.js";
 
 const missingConfig = validateConfig();
 if (missingConfig.length) {
@@ -299,7 +300,7 @@ async function handleCommand(message: Message): Promise<void> {
           .setColor(0x55c278)
           .setTitle("Family commands")
           .setDescription([
-            `\`${PREFIX}family adopt @user\` · Adopt a member as your child.`,
+            `\`${PREFIX}family adopt @user\` · Invite a member to join your family as a child.`,
             `\`${PREFIX}family disown @user\` · Remove your child relationship.`,
             `\`${PREFIX}family runaway [@parent]\` · Leave one of your parent relationships.`,
             `\`${PREFIX}family children|parent|siblings|tree [@user]\` · View family members.`,
@@ -387,15 +388,27 @@ async function handleCommand(message: Message): Promise<void> {
           await message.reply(`Usage: \`${PREFIX}family adopt @user\` (choose another human member).`);
           return;
         }
-        const result = await database.addFamilyParent(guildId, message.author.id, target.id);
-        const response = result === "added"
-          ? `${message.author} welcomed ${target} into their family as a child.`
-          : result === "already"
-            ? `${target} is already listed as your child.`
-            : result === "limit"
-              ? `${target} already has the maximum of two parents.`
-              : "That adoption would create an invalid family cycle.";
-        await message.reply(response);
+        const currentParents = await database.getFamilyParents(guildId, target.id);
+        if (currentParents.includes(message.author.id)) {
+          await message.reply(`${target} is already listed as your child.`);
+          return;
+        }
+        if (currentParents.length >= 2) {
+          await message.reply(`${target} already has the maximum of two parents.`);
+          return;
+        }
+        if (!message.channel.isSendable()) return;
+        const requestId = await database.createFamilyAdoptionRequest(guildId, message.author.id, target.id);
+        if (!requestId) {
+          await message.reply("There is already a pending family invitation for that member.");
+          return;
+        }
+        const accept = new ButtonBuilder().setCustomId(`family:adopt:${requestId}:accept`).setLabel("Accept").setStyle(ButtonStyle.Success);
+        const decline = new ButtonBuilder().setCustomId(`family:adopt:${requestId}:decline`).setLabel("Decline").setStyle(ButtonStyle.Secondary);
+        await message.channel.send({
+          content: `${target}, ${message.author} invited you to join their family as a child. You must accept to create the relationship.`,
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(accept, decline)],
+        });
         return;
       }
 
@@ -485,39 +498,57 @@ async function handleCommand(message: Message): Promise<void> {
           });
           return;
         }
-        const formatRelations = (items: typeof parents): string => items
-          .slice(0, 18)
-          .map((relation) => `<@${relation.userId}>`)
-          .join(", ") || "None";
+        const graph = await database.getFamilyGraph(guildId);
+        const connectedIds = new Set([target.id]);
+        const queue = [target.id];
+        while (queue.length && connectedIds.size < 40) {
+          const currentId = queue.shift()!;
+          for (const edge of graph) {
+            if (edge.fromId === currentId && !connectedIds.has(edge.toId) && connectedIds.size < 40) {
+              connectedIds.add(edge.toId);
+              queue.push(edge.toId);
+            }
+          }
+        }
+        const roleById = new Map(relations.map((relation) => [
+          relation.userId,
+          relation.relation === "sibling" && relation.role && relation.role !== "sibling"
+            ? relation.role
+            : relation.relation[0]!.toUpperCase() + relation.relation.slice(1),
+        ]));
+        const familyMembers: FamilyTreeMember[] = [{
+          id: target.id,
+          name: target.username,
+          avatarUrl: target.displayAvatarURL({ extension: "png", size: 128 }),
+          role: "You",
+        }];
+        for (const memberId of connectedIds) {
+          if (memberId === target.id) continue;
+          const member = await message.guild.members.fetch(memberId).catch(() => null);
+          const user = member?.user ?? await client.users.fetch(memberId).catch(() => null);
+          if (!user) continue;
+          familyMembers.push({
+            id: user.id,
+            name: member?.displayName ?? user.username,
+            avatarUrl: user.displayAvatarURL({ extension: "png", size: 128 }),
+            role: roleById.get(user.id) ?? "Family",
+          });
+        }
         const familyName = await database.getFamilyName(guildId, target.id);
+        const treeImage = await renderFamilyTree(
+          familyName ?? `${target.username}'s`,
+          target.id,
+          familyMembers,
+          graph as FamilyTreeEdge[],
+        );
         const treeEmbed = new EmbedBuilder()
           .setColor(0x55c278)
           .setTitle(familyName ? `${familyName} family tree` : `${target.username}'s family tree`)
-          .setThumbnail(target.displayAvatarURL({ size: 512 }))
-          .addFields(
-            { name: "Parents", value: formatRelations(parents), inline: true },
-            { name: "Siblings", value: formatRelations(siblings), inline: true },
-            { name: "Children", value: formatRelations(children), inline: false },
-          );
-        const memberProfiles: EmbedBuilder[] = [];
-        for (const relation of relations.slice(0, 9)) {
-          const member = await message.guild.members.fetch(relation.userId).catch(() => null);
-          const user = member?.user ?? await client.users.fetch(relation.userId).catch(() => null);
-          if (!user) continue;
-          const relationName = relation.relation === "parent"
-            ? "Parent"
-            : relation.relation === "child"
-              ? "Child"
-              : relation.role && relation.role !== "sibling"
-                ? relation.role
-                : "Sibling";
-          const profile = new EmbedBuilder()
-            .setColor(0x687182)
-            .setAuthor({ name: `${user.tag} · ${relationName}`, iconURL: user.displayAvatarURL() })
-            .setThumbnail(user.displayAvatarURL({ size: 256 }));
-          memberProfiles.push(profile);
-        }
-        await message.reply({ embeds: [treeEmbed, ...memberProfiles] });
+          .setImage("attachment://family-tree.png");
+        await message.reply({
+          embeds: [treeEmbed],
+          files: [new AttachmentBuilder(treeImage, { name: "family-tree.png" })],
+        });
         return;
       }
 
@@ -743,7 +774,7 @@ async function handleCommand(message: Message): Promise<void> {
         style.font = font;
       } else if (action === "background") {
         if (args[1]?.toLowerCase() === "clear") {
-          style.backgroundBase64 = null;
+          style.backgroundData = null;
         } else {
           const attachment = message.attachments.first();
           if (!attachment || attachment.size > 800_000) {
@@ -770,12 +801,17 @@ async function handleCommand(message: Message): Promise<void> {
             await message.reply("That image is too large after download. Use an image under 800 KB.");
             return;
           }
-          style.backgroundBase64 = imageData.toString("base64");
+          const optimized = await optimizeStatusBackground(imageData);
+          if (optimized.length > 350_000) {
+            await message.reply("That image is too detailed to store as a status background. Try a simpler or smaller image.");
+            return;
+          }
+          style.backgroundData = Uint8Array.from(optimized).buffer;
         }
       } else if (action === "reset") {
         style.color = "#55c278";
         style.font = "sans";
-        style.backgroundBase64 = null;
+        style.backgroundData = null;
       } else {
         await message.reply(`Usage: \`${PREFIX}statusstyle color|font|background|reset ...\``);
         return;
@@ -809,7 +845,7 @@ async function handleCommand(message: Message): Promise<void> {
         accountAge,
         serverTime,
         level,
-        levelTitle: `${title.emoji} ${title.name}`,
+        levelTitle: title.name,
         xp,
         nextLevelXp,
         wordsSent: metrics.wordsSent,
@@ -817,7 +853,7 @@ async function handleCommand(message: Message): Promise<void> {
         voiceTime: formatDuration(metrics.voiceMinutes * 60_000),
         accentColor: style.color,
         font: style.font,
-        backgroundBase64: style.backgroundBase64,
+        backgroundData: style.backgroundData,
       });
       await message.reply({
         embeds: [new EmbedBuilder()
@@ -1606,6 +1642,39 @@ client.on(Events.AutoModerationActionExecution, (execution) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton() || !interaction.guild) return;
   try {
+    if (interaction.customId.startsWith("family:adopt:")) {
+      const [, , requestIdText, action] = interaction.customId.split(":");
+      const requestId = Number(requestIdText);
+      if (!Number.isInteger(requestId) || !["accept", "decline"].includes(action ?? "")) {
+        await interaction.reply({ content: "That family invitation is invalid.", ephemeral: true });
+        return;
+      }
+      const result = await database.respondToFamilyAdoptionRequest(
+        interaction.guild.id,
+        requestId,
+        interaction.user.id,
+        action === "accept",
+      );
+      if (result === "not-target") {
+        await interaction.reply({ content: "Only the invited member can respond to this adoption request.", ephemeral: true });
+        return;
+      }
+      if (result === "missing") {
+        await interaction.reply({ content: "This family invitation has already been answered.", ephemeral: true });
+        return;
+      }
+      const response = result === "accepted"
+        ? "You accepted the family invitation. The parent-child relationship is now active."
+        : result === "declined"
+          ? "You declined the family invitation."
+          : result === "limit"
+            ? "You already have the maximum of two parents, so this invitation could not be accepted."
+            : "This invitation would create a family cycle, so it could not be accepted.";
+      await interaction.reply({ content: response, ephemeral: true });
+      await interaction.message.edit({ components: [] }).catch(() => undefined);
+      return;
+    }
+
     if (interaction.customId.startsWith("family:sibling:")) {
       const [, , requestIdText, action] = interaction.customId.split(":");
       const requestId = Number(requestIdText);

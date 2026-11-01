@@ -45,8 +45,8 @@ All commands start with a comma. `,help` shows member commands to everyone; the 
 | `,birthday channel #channel|off` | Set the server's birthday announcement channel (Manage Server required) |
 | `,ship @user @user`, `,wanted [@user]` | Generate a random Love/Lust match percentage or wanted bounty |
 | `,text <effect> <text>` | Transform text with `upper`, `lower`, `reverse`, `mock`, `clap`, `spoiler`, `binary`, or `owo` |
-| `,family manage`, `,family adopt @user`, `,family disown @user`, `,family runaway [@parent]` | Manage parent/child links; two members can each adopt the same user to become co-parents |
-| `,family children|parent|siblings|tree [@user]` | View saved family members; tree profile cards show avatar and family role only |
+| `,family manage`, `,family adopt @user`, `,family disown @user`, `,family runaway [@parent]` | Manage parent/child links; adoption requires the invited member to accept, and two accepted parents can co-parent |
+| `,family children|parent|siblings|tree [@user]` | View family links or a generated visual tree with avatar nodes and generation connectors |
 | `,family name <name|clear>` | Rename or clear the name for your connected family tree |
 | `,family sibling @user [brother|sister]`, `,family unsibling @user` | Request an accepted sibling bond or end a direct bond |
 | `,family relationship @user @user` | Show the saved family path between two members |
@@ -61,6 +61,10 @@ All commands start with a comma. `,help` shows member commands to everyone; the 
 | `,alerts add twitch|kick <channel>` | Monitor a Twitch or Kick channel for live sessions |
 | `,alerts add youtube <channel-id>` | Monitor a YouTube channel ID (starts with `UC`) for new uploads |
 | `,alerts list`, `,alerts remove <id>` | Manage notification sources |
+
+Status backgrounds are resized to card dimensions, encoded as WebP, and stored as binary Turso BLOBs. Existing Base64 backgrounds are migrated automatically; other settings and statistics remain queryable relational data because Base64 would increase their storage size.
+
+Only the configured bot owner can use `,level max @user` or `,set level @user <1-100>`. These commands appear in a separate bot-owner help section and are not shown to server owners or administrators unless their account is also configured as a bot owner.
 
 Twitch alerts use `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` from the process environment and include the live title, category, viewer count, start time, preview image, and link. Save the variables in Wispbyte and restart the bot after updating them.
 
