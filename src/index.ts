@@ -40,27 +40,36 @@ const client = new Client({
   ],
 });
 
-const publicCommands = [
+const memberCommands = [
+  "level top, rank [@user]",
+  "status [@user], setbio <text|clear>",
+  "afk [reason], prof [@user], banner [@user], snipe",
+  "daily, rep @user, leaderboard rep",
+  "birthday set <month> <day>, birthday clear",
+  "stats, ping, help",
+];
+const serverManagementCommands = [
   "welcome #channel | message, welcome off",
   "autorole @role, autorole off",
   "logs #channel, logs off",
-  "level enable|disable|top, rank [@user]",
+  "level enable|disable",
   "level reward <level> @role, level ignore-channel|allow-channel #channel, level ignore-role|allow-role @role",
-  "status [@user], setbio <text|clear>",
-  "afk [reason], prof [@user], banner [@user], snipe",
   "giveaway start <duration> <prize>, giveaway reroll",
-  "role add @role [button label]",
-  "ticket setup @support-role",
   "alerts channel #channel|off, alerts add twitch|youtube|kick <channel>, alerts list|remove <id>",
-  "daily, rep @user, leaderboard rep",
-  "birthday set <month> <day>, birthday clear, birthday channel #channel|off",
-  "stats, ping, help",
+  "birthday channel #channel|off",
+  "automod enable|disable",
+];
+const roleManagementCommands = [
+  "role add @role [button label]",
+];
+const channelManagementCommands = [
+  "ticket setup @support-role",
 ];
 const moderationCommands = [
   "kick @user [reason], ban @user [reason], softban @user [reason]",
   "timeout @user <minutes> [reason], mute @user <minutes> [reason]",
   "warn @user <reason>, warnings @user, clear <1-100>",
-  "lock [#channel], unlock [#channel], automod enable|disable",
+  "lock [#channel], unlock [#channel]",
 ];
 const botOwnerIds = new Set<string>();
 let botOwnerLookup: Promise<void> | undefined;
@@ -284,16 +293,38 @@ async function handleCommand(message: Message): Promise<void> {
       const canSeeModerationCommands = botOwnerIds.has(message.author.id)
         || message.guild.ownerId === message.author.id
         || hasPermission(message, PermissionsBitField.Flags.Administrator);
-      const embed = new EmbedBuilder()
-        .setColor(0x55c278)
-        .setTitle("Valkyr commands")
-        .setDescription(publicCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"));
+      const sections = [{
+        name: "Member commands",
+        value: memberCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
+      }];
+      if (hasPermission(message, PermissionsBitField.Flags.ManageGuild)) {
+        sections.push({
+          name: "Server management commands",
+          value: serverManagementCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
+        });
+      }
+      if (hasPermission(message, PermissionsBitField.Flags.ManageRoles)) {
+        sections.push({
+          name: "Role management commands",
+          value: roleManagementCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
+        });
+      }
+      if (hasPermission(message, PermissionsBitField.Flags.ManageChannels)) {
+        sections.push({
+          name: "Channel management commands",
+          value: channelManagementCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
+        });
+      }
       if (canSeeModerationCommands) {
-        embed.addFields({
+        sections.push({
           name: "Moderation commands",
           value: moderationCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
         });
       }
+      const embed = new EmbedBuilder()
+        .setColor(0x55c278)
+        .setTitle("Valkyr commands")
+        .addFields(sections);
       await message.reply({ embeds: [embed] });
       return;
     }

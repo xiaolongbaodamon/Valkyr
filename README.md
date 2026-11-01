@@ -22,7 +22,7 @@ The bot creates its tables in Turso at startup. Keep the database URL and auth t
 
 ## Commands
 
-All commands start with a comma. Settings commands require **Manage Server**; moderation and setup commands check their corresponding Discord permissions.
+All commands start with a comma. `,help` shows member commands to everyone and reveals server, role, and channel setup sections only to members with the matching permissions. The moderation section is restricted to the bot owner, server owner, and administrators. Commands also enforce their required Discord permissions when run.
 
 | Command | Purpose |
 | --- | --- |
