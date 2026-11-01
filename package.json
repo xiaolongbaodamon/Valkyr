@@ -17,11 +17,11 @@
     "@libsql/client": "^0.15.15",
     "discord.js": "^14.21.0",
     "dotenv": "^16.6.1",
-    "fast-xml-parser": "^5.2.5"
+    "fast-xml-parser": "^5.2.5",
+    "tsx": "^4.20.5"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }
 }
