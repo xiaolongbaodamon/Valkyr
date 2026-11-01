@@ -75,7 +75,7 @@ const moderationCommands = [
 const botOwnerCommands = [
   "level max @user",
 ];
-const botOwnerIds = new Set<string>();
+const botOwnerIds = new Set<string>(config.botOwnerIds);
 let botOwnerLookup: Promise<void> | undefined;
 
 function loadBotOwnerIds(): Promise<void> {

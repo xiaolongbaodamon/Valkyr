@@ -7,6 +7,10 @@ export const config = {
   twitchClientId: process.env.TWITCH_CLIENT_ID ?? "",
   twitchClientSecret: process.env.TWITCH_CLIENT_SECRET ?? "",
   birthdayGifUrl: process.env.BIRTHDAY_GIF_URL || "https://media.giphy.com/media/feio2yIUMtdqWjRiaF/giphy.gif",
+  botOwnerIds: (process.env.BOT_OWNER_IDS?.trim() || "906461875221434428")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
 };
 
 export function validateConfig(): string[] {
