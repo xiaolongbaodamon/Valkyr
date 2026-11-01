@@ -28,6 +28,7 @@ All commands start with a comma. `,help` shows member commands to everyone; the 
 | --- | --- |
 | `,help`, `,ping`, `,stats`, `,status [@user]` | Server stats and a member profile with account age, server tenure, tracked words/commands, voice time, and XP-earned level title |
 | `,setbio <text>`, `,setbio clear` | Set or clear the personal bio shown on your `,status` card (up to 300 characters) |
+| `,statusstyle color #RRGGBB`, `,statusstyle font sans|serif|mono`, `,statusstyle background`, `,statusstyle reset` | Level 100+ members can customize their status-card image; attach a PNG, JPEG, or WebP under 800 KB for a background, or use `,statusstyle background clear` to remove it |
 | `,welcome #channel | message`, `,welcome off` | Configure the welcome embed; supports `{user}` and `{server}`, account age, invite attribution, and member count |
 | `,leave #channel | message`, `,leave off` | Configure the member-leave embed; default caption: “See ya! {user} Thankyou for memories. GOODBYE” |
 | `,autorole @role`, `,autorole off` | Assign a role to new members |
@@ -42,6 +43,13 @@ All commands start with a comma. `,help` shows member commands to everyone; the 
 | `,rep @user`, `,rep top`, `,lb rep` | Give reputation or view the helpful-member leaderboard (legacy `,leaderboard rep` remains supported) |
 | `,birthday set <month> <day>`, `,birthday clear` | Save or remove your annual birthday |
 | `,birthday channel #channel|off` | Set the server's birthday announcement channel (Manage Server required) |
+| `,ship @user @user`, `,wanted [@user]` | Generate a random Love/Lust match percentage or wanted bounty |
+| `,text <effect> <text>` | Transform text with `upper`, `lower`, `reverse`, `mock`, `clap`, `spoiler`, `binary`, or `owo` |
+| `,family manage`, `,family adopt @user`, `,family disown @user`, `,family runaway [@parent]` | Manage parent/child links; two members can each adopt the same user to become co-parents |
+| `,family children|parent|siblings|tree [@user]` | View saved family members; tree profile cards show avatar and family role only |
+| `,family name <name|clear>` | Rename or clear the name for your connected family tree |
+| `,family sibling @user [brother|sister]`, `,family unsibling @user` | Request an accepted sibling bond or end a direct bond |
+| `,family relationship @user @user` | Show the saved family path between two members |
 | `,automod enable|disable` | Enable Discord spam filtering and Valkyr attachment/poll filtering |
 | `,afk [reason]` | Set an AFK status, clear it on your next message, and notify people who mention you |
 | `,prof [@user]`, `,banner [@user]` | Show a large profile embed or the user's Discord banner |

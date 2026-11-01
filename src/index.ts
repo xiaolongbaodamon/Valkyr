@@ -1,6 +1,7 @@
 import "dotenv/config";
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   AutoModerationActionType,
   AutoModerationRuleEventType,
   AutoModerationRuleTriggerType,
@@ -19,6 +20,7 @@ import { startAlertPolling } from "./alerts.js";
 import { config, PREFIX, validateConfig } from "./config.js";
 import { Database, type AlertPlatform, type Giveaway } from "./database.js";
 import { getLevelTitle } from "./levelTitles.js";
+import { renderStatusCard } from "./statusCard.js";
 
 const missingConfig = validateConfig();
 if (missingConfig.length) {
@@ -43,9 +45,15 @@ const client = new Client({
 const memberCommands = [
   "level top, rank [@user]",
   "status [@user], setbio <text|clear>",
+  "statusstyle color|font|background|reset (level 100+)",
   "afk [reason], prof [@user], banner [@user], snipe [@user]",
   "daily, rep @user|top, lb rep",
   "birthday set <month> <day>, birthday clear",
+  "ship @user @user, wanted [@user], text <effect> <text>",
+  "family manage|adopt @user|disown @user|runaway [@parent]",
+  "family name <name|clear>",
+  "family children|parent|tree|siblings [@user]",
+  "family sibling @user [brother|sister], unsibling @user, relationship @user @user",
   "stats, ping, help",
 ];
 const serverManagementCommands = [
@@ -73,7 +81,7 @@ const moderationCommands = [
   "lock [#channel], unlock [#channel]",
 ];
 const botOwnerCommands = [
-  "level max @user",
+  "level max @user, set level @user <1-100>",
 ];
 const botOwnerIds = new Set<string>(config.botOwnerIds);
 let botOwnerLookup: Promise<void> | undefined;
@@ -124,6 +132,31 @@ function formatDuration(milliseconds: number): string {
     minutes ? `${minutes}m` : "",
   ].filter(Boolean);
   return parts.slice(0, 2).join(" ") || "less than a minute";
+}
+
+function transformText(effect: string, input: string): string | undefined {
+  switch (effect.toLowerCase()) {
+    case "upper":
+    case "uppercase":
+      return input.toLocaleUpperCase();
+    case "lower":
+    case "lowercase":
+      return input.toLocaleLowerCase();
+    case "reverse":
+      return Array.from(input).reverse().join("");
+    case "mock":
+      return Array.from(input).map((character, index) => index % 2 ? character.toLocaleLowerCase() : character.toLocaleUpperCase()).join("");
+    case "clap":
+      return `👏 ${input.trim().split(/\s+/).join(" 👏 ")} 👏`;
+    case "spoiler":
+      return `||${input}||`;
+    case "binary":
+      return Array.from(input).map((character) => character.codePointAt(0)!.toString(2).padStart(8, "0")).join(" ");
+    case "owo":
+      return input.replace(/[rl]/gi, (character) => character === character.toUpperCase() ? "W" : "w").replace(/n([aeiou])/gi, (_, vowel: string) => `ny${vowel}`);
+    default:
+      return undefined;
+  }
 }
 
 const xpCooldowns = new Map<string, number>();
@@ -212,6 +245,302 @@ async function handleCommand(message: Message): Promise<void> {
   const guildId = message.guild.id;
 
   try {
+    if (command === "ship") {
+      const users = [...message.mentions.users.values()].slice(0, 2);
+      if (users.length !== 2) {
+        await message.reply(`Usage: \`${PREFIX}ship @user @user\``);
+        return;
+      }
+      const compatibility = Math.floor(Math.random() * 101);
+      const result = compatibility >= 50 ? "Love" : "Lust";
+      const embed = new EmbedBuilder()
+        .setColor(result === "Love" ? 0xff6b9a : 0xb44cff)
+        .setTitle(`${users[0]!.username} × ${users[1]!.username}`)
+        .setDescription(`💞 **${compatibility}% ${result}**`)
+        .setThumbnail(users[0]!.displayAvatarURL());
+      await message.reply({ embeds: [embed] });
+      return;
+    }
+    if (command === "wanted") {
+      const target = message.mentions.users.first() ?? message.author;
+      const bounty = Math.floor(Math.random() * 999_000_000) + 1_000_000;
+      const embed = new EmbedBuilder()
+        .setColor(0xe4b84b)
+        .setTitle("WANTED")
+        .setDescription(`**${target.username}**\n\nBounty: **$${bounty.toLocaleString()}**`)
+        .setThumbnail(target.displayAvatarURL({ size: 512 }))
+        .setFooter({ text: "Valkyr wanted board" });
+      await message.reply({ embeds: [embed] });
+      return;
+    }
+    if (command === "text") {
+      const effect = args[0]?.toLowerCase();
+      const input = args.slice(1).join(" ").trim();
+      if (!effect || !input || input.length > 1000) {
+        await message.reply(`Usage: \`${PREFIX}text <upper|lower|reverse|mock|clap|spoiler|binary|owo> <text>\``);
+        return;
+      }
+      const output = transformText(effect, input);
+      if (!output) {
+        await message.reply(`Unknown text effect. Try: \`upper\`, \`lower\`, \`reverse\`, \`mock\`, \`clap\`, \`spoiler\`, \`binary\`, or \`owo\`.`);
+        return;
+      }
+      if (output.length > 1900) {
+        await message.reply("That transformed text is too long to send. Try a shorter message or another effect.");
+        return;
+      }
+      await message.reply({ content: output, allowedMentions: { parse: [] } });
+      return;
+    }
+    if (command === "family") {
+      const action = args[0]?.toLowerCase();
+      if (!action || action === "manage") {
+        const embed = new EmbedBuilder()
+          .setColor(0x55c278)
+          .setTitle("Family commands")
+          .setDescription([
+            `\`${PREFIX}family adopt @user\` · Adopt a member as your child.`,
+            `\`${PREFIX}family disown @user\` · Remove your child relationship.`,
+            `\`${PREFIX}family runaway [@parent]\` · Leave one of your parent relationships.`,
+            `\`${PREFIX}family children|parent|siblings|tree [@user]\` · View family members.`,
+            `\`${PREFIX}family sibling @user [brother|sister]\` · Request a sibling bond.`,
+            `\`${PREFIX}family unsibling @user\` · End a direct sibling bond.`,
+            `\`${PREFIX}family name <name|clear>\` · Rename your connected family tree.`,
+            `\`${PREFIX}family relationship @user @user\` · Find the relationship path.`,
+          ].join("\n"));
+        await message.reply({ embeds: [embed] });
+        return;
+      }
+
+      if (action === "name") {
+        const requestedName = args.slice(1).join(" ").trim();
+        if (!requestedName) {
+          await message.reply(`Usage: \`${PREFIX}family name <name|clear>\``);
+          return;
+        }
+        const familyName = requestedName.toLowerCase() === "clear" ? null : requestedName.slice(0, 40);
+        const graph = await database.getFamilyGraph(guildId);
+        const connected = new Set([message.author.id]);
+        const queue = [message.author.id];
+        while (queue.length) {
+          const currentId = queue.shift()!;
+          for (const edge of graph) {
+            if (edge.fromId === currentId && !connected.has(edge.toId)) {
+              connected.add(edge.toId);
+              queue.push(edge.toId);
+            }
+          }
+        }
+        await database.setFamilyName(guildId, [...connected], familyName);
+        await message.reply({
+          content: familyName
+            ? `Your family tree is now named **${familyName}**.`
+            : "Your family tree name has been cleared.",
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      if (action === "relationship") {
+        const [first, second] = [...message.mentions.users.values()];
+        if (!first || !second || first.id === second.id) {
+          await message.reply(`Usage: \`${PREFIX}family relationship @user @user\``);
+          return;
+        }
+        const graph = await database.getFamilyGraph(guildId);
+        const visited = new Set([first.id]);
+        const previous = new Map<string, { fromId: string; label: string }>();
+        const queue = [first.id];
+        while (queue.length && !visited.has(second.id)) {
+          const current = queue.shift()!;
+          for (const edge of graph) {
+            if (edge.fromId !== current || visited.has(edge.toId)) continue;
+            visited.add(edge.toId);
+            previous.set(edge.toId, {
+              fromId: current,
+              label: edge.kind === "parent" ? "is parent of" : edge.kind === "child" ? "is child of" : "is sibling of",
+            });
+            queue.push(edge.toId);
+          }
+        }
+        if (!visited.has(second.id)) {
+          await message.reply(`${first} and ${second} have no saved family relationship.`);
+          return;
+        }
+        const path: string[] = [];
+        let currentId = second.id;
+        while (currentId !== first.id) {
+          const step = previous.get(currentId);
+          if (!step) break;
+          path.unshift(`<@${step.fromId}> ${step.label} <@${currentId}>`);
+          currentId = step.fromId;
+        }
+        await message.reply({
+          embeds: [new EmbedBuilder().setColor(0x55c278).setTitle("Family relationship").setDescription(path.join("\n"))],
+        });
+        return;
+      }
+
+      if (action === "adopt") {
+        const target = await resolveMember(message, args[1]);
+        if (!target || target.id === message.author.id || target.user.bot) {
+          await message.reply(`Usage: \`${PREFIX}family adopt @user\` (choose another human member).`);
+          return;
+        }
+        const result = await database.addFamilyParent(guildId, message.author.id, target.id);
+        const response = result === "added"
+          ? `${message.author} welcomed ${target} into their family as a child.`
+          : result === "already"
+            ? `${target} is already listed as your child.`
+            : result === "limit"
+              ? `${target} already has the maximum of two parents.`
+              : "That adoption would create an invalid family cycle.";
+        await message.reply(response);
+        return;
+      }
+
+      if (action === "disown") {
+        const target = await resolveMember(message, args[1]);
+        if (!target) {
+          await message.reply(`Usage: \`${PREFIX}family disown @user\``);
+          return;
+        }
+        const removed = await database.removeFamilyParent(guildId, message.author.id, target.id);
+        await message.reply(removed ? `${target} is no longer listed as your child.` : `${target} is not listed as your child.`);
+        return;
+      }
+
+      if (action === "runaway") {
+        const parents = await database.getFamilyParents(guildId, message.author.id);
+        const selectedParent = message.mentions.users.first()?.id;
+        if (!parents.length) {
+          await message.reply("You don't have a saved parent relationship to leave.");
+          return;
+        }
+        if (!selectedParent && parents.length > 1) {
+          await message.reply(`You have more than one parent. Choose one: ${parents.map((id) => `<@${id}>`).join(", ")}`);
+          return;
+        }
+        const parentId = selectedParent ?? parents[0]!;
+        if (!parents.includes(parentId)) {
+          await message.reply("That member isn't one of your saved parents.");
+          return;
+        }
+        await database.removeFamilyParent(guildId, parentId, message.author.id);
+        await message.reply(`You left your family relationship with <@${parentId}>.`);
+        return;
+      }
+
+      if (action === "sibling") {
+        const target = await resolveMember(message, args[1]);
+        const requesterRole = args[2]?.toLowerCase() || "sibling";
+        if (!target || target.id === message.author.id || target.user.bot || !["brother", "sister", "sibling"].includes(requesterRole)) {
+          await message.reply(`Usage: \`${PREFIX}family sibling @user [brother|sister]\``);
+          return;
+        }
+        const requestId = await database.createSiblingRequest(guildId, message.author.id, target.id, requesterRole);
+        if (!requestId) {
+          await message.reply("A sibling bond already exists or a request is already pending.");
+          return;
+        }
+        if (!message.channel.isSendable()) return;
+        const accept = new ButtonBuilder().setCustomId(`family:sibling:${requestId}:accept`).setLabel("Accept").setStyle(ButtonStyle.Success);
+        const decline = new ButtonBuilder().setCustomId(`family:sibling:${requestId}:decline`).setLabel("Decline").setStyle(ButtonStyle.Secondary);
+        await message.channel.send({
+          content: `${target}, ${message.author} sent you a family sibling request.`,
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(accept, decline)],
+        });
+        return;
+      }
+
+      if (action === "unsibling") {
+        const target = await resolveMember(message, args[1]);
+        if (!target || target.id === message.author.id) {
+          await message.reply(`Usage: \`${PREFIX}family unsibling @user\``);
+          return;
+        }
+        const removed = await database.removeFamilySibling(guildId, message.author.id, target.id);
+        await message.reply(removed ? `Your sibling bond with ${target} has ended.` : `You don't have a direct sibling bond with ${target}.`);
+        return;
+      }
+
+      if (["children", "parent", "siblings", "tree"].includes(action)) {
+        const target = message.mentions.users.first() ?? message.author;
+        const relations = await database.getFamilyRelations(guildId, target.id);
+        const parents = relations.filter((relation) => relation.relation === "parent");
+        const children = relations.filter((relation) => relation.relation === "child");
+        const siblings = relations.filter((relation) => relation.relation === "sibling");
+        if (action === "children" || action === "parent" || action === "siblings") {
+          const selected = action === "children" ? children : action === "parent" ? parents : siblings;
+          const formatted = selected.slice(0, 20).map((relation) =>
+            relation.relation === "sibling" && relation.role && relation.role !== "sibling"
+              ? `<@${relation.userId}> (${relation.role})`
+              : `<@${relation.userId}>`,
+          );
+          await message.reply({
+            embeds: [new EmbedBuilder()
+              .setColor(0x55c278)
+              .setTitle(`${target.username}'s ${action}`)
+              .setDescription(formatted.join("\n") || "No saved family members.")],
+          });
+          return;
+        }
+        const formatRelations = (items: typeof parents): string => items
+          .slice(0, 18)
+          .map((relation) => `<@${relation.userId}>`)
+          .join(", ") || "None";
+        const familyName = await database.getFamilyName(guildId, target.id);
+        const treeEmbed = new EmbedBuilder()
+          .setColor(0x55c278)
+          .setTitle(familyName ? `${familyName} family tree` : `${target.username}'s family tree`)
+          .setThumbnail(target.displayAvatarURL({ size: 512 }))
+          .addFields(
+            { name: "Parents", value: formatRelations(parents), inline: true },
+            { name: "Siblings", value: formatRelations(siblings), inline: true },
+            { name: "Children", value: formatRelations(children), inline: false },
+          );
+        const memberProfiles: EmbedBuilder[] = [];
+        for (const relation of relations.slice(0, 9)) {
+          const member = await message.guild.members.fetch(relation.userId).catch(() => null);
+          const user = member?.user ?? await client.users.fetch(relation.userId).catch(() => null);
+          if (!user) continue;
+          const relationName = relation.relation === "parent"
+            ? "Parent"
+            : relation.relation === "child"
+              ? "Child"
+              : relation.role && relation.role !== "sibling"
+                ? relation.role
+                : "Sibling";
+          const profile = new EmbedBuilder()
+            .setColor(0x687182)
+            .setAuthor({ name: `${user.tag} · ${relationName}`, iconURL: user.displayAvatarURL() })
+            .setThumbnail(user.displayAvatarURL({ size: 256 }));
+          memberProfiles.push(profile);
+        }
+        await message.reply({ embeds: [treeEmbed, ...memberProfiles] });
+        return;
+      }
+
+      await message.reply(`Use \`${PREFIX}family manage\` to see family commands.`);
+      return;
+    }
+    if (command === "set" && args[0]?.toLowerCase() === "level") {
+      await loadBotOwnerIds();
+      if (!botOwnerIds.has(message.author.id)) {
+        await message.reply("Only the bot owner can set a member's level.");
+        return;
+      }
+      const target = await resolveMember(message, args[1]);
+      const level = Number(args[2]);
+      if (!target || !Number.isInteger(level) || level < 1 || level > 100) {
+        await message.reply(`Usage: \`${PREFIX}set level @user <1-100>\``);
+        return;
+      }
+      await database.setXp(guildId, target.id, level * level * 100);
+      await message.reply(`${target} was set to level ${level}.`);
+      return;
+    }
+
     if (command === "daily") {
       const claim = await database.claimDaily(guildId, message.author.id);
       if (!claim.claimed) {
@@ -389,6 +718,72 @@ async function handleCommand(message: Message): Promise<void> {
       });
       return;
     }
+    if (command === "statusstyle") {
+      const xp = await database.getXp(guildId, message.author.id);
+      const level = Math.floor(Math.sqrt(xp / 100));
+      if (level < 100) {
+        await message.reply(`Status design customization unlocks at level 100. You are level ${level}.`);
+        return;
+      }
+      const action = args[0]?.toLowerCase();
+      const style = await database.getStatusCustomization(guildId, message.author.id);
+      if (action === "color") {
+        const color = args[1]?.toLowerCase();
+        if (!color || !/^#[0-9a-f]{6}$/.test(color)) {
+          await message.reply(`Usage: \`${PREFIX}statusstyle color #RRGGBB\` (example: \`${PREFIX}statusstyle color #ff6699\`).`);
+          return;
+        }
+        style.color = color;
+      } else if (action === "font") {
+        const font = args[1]?.toLowerCase();
+        if (font !== "sans" && font !== "serif" && font !== "mono") {
+          await message.reply(`Choose a font: \`${PREFIX}statusstyle font sans|serif|mono\`.`);
+          return;
+        }
+        style.font = font;
+      } else if (action === "background") {
+        if (args[1]?.toLowerCase() === "clear") {
+          style.backgroundBase64 = null;
+        } else {
+          const attachment = message.attachments.first();
+          if (!attachment || attachment.size > 800_000) {
+            await message.reply(`Attach a PNG, JPEG, or WebP image smaller than 800 KB, or use \`${PREFIX}statusstyle background clear\`.`);
+            return;
+          }
+          const url = new URL(attachment.url);
+          if (!url.protocol.startsWith("https") || !["cdn.discordapp.com", "media.discordapp.net"].includes(url.hostname)) {
+            await message.reply("For safety, backgrounds must be uploaded as a Discord attachment.");
+            return;
+          }
+          const response = await fetch(url);
+          if (!response.ok) {
+            await message.reply("I couldn't download that image. Please re-upload it and try again.");
+            return;
+          }
+          const mime = (response.headers.get("content-type") ?? attachment.contentType ?? "").split(";")[0]!.toLowerCase();
+          if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) {
+            await message.reply("Backgrounds must be PNG, JPEG, or WebP images.");
+            return;
+          }
+          const imageData = Buffer.from(await response.arrayBuffer());
+          if (imageData.length > 800_000) {
+            await message.reply("That image is too large after download. Use an image under 800 KB.");
+            return;
+          }
+          style.backgroundBase64 = imageData.toString("base64");
+        }
+      } else if (action === "reset") {
+        style.color = "#55c278";
+        style.font = "sans";
+        style.backgroundBase64 = null;
+      } else {
+        await message.reply(`Usage: \`${PREFIX}statusstyle color|font|background|reset ...\``);
+        return;
+      }
+      await database.setStatusCustomization(guildId, message.author.id, style);
+      await message.reply("Your status card design has been saved. View it with `,status`.");
+      return;
+    }
     if (command === "status") {
       const user = message.mentions.users.first() ?? message.author;
       const member = await message.guild.members.fetch(user.id).catch(() => null);
@@ -404,17 +799,32 @@ async function handleCommand(message: Message): Promise<void> {
       const serverTime = member.joinedTimestamp
         ? formatDuration(Date.now() - member.joinedTimestamp)
         : "Unknown";
+      const style = await database.getStatusCustomization(guildId, user.id);
+      const nextLevelXp = (level + 1) * (level + 1) * 100;
+      const card = await renderStatusCard({
+        displayName: member.displayName,
+        username: user.tag,
+        avatarUrl: user.displayAvatarURL({ extension: "png", size: 256 }),
+        bio: metrics.bio ?? "No bio set. Use ,setbio <text> to add one.",
+        accountAge,
+        serverTime,
+        level,
+        levelTitle: `${title.emoji} ${title.name}`,
+        xp,
+        nextLevelXp,
+        wordsSent: metrics.wordsSent,
+        commandsUsed: metrics.commandsUsed,
+        voiceTime: formatDuration(metrics.voiceMinutes * 60_000),
+        accentColor: style.color,
+        font: style.font,
+        backgroundBase64: style.backgroundBase64,
+      });
       await message.reply({
         embeds: [new EmbedBuilder()
           .setColor(0x55c278)
           .setTitle(`${member.displayName}'s status`)
-          .setThumbnail(user.displayAvatarURL())
-          .addFields(
-            { name: "User Profile", value: `Member: ${member}\nAccount age: ${accountAge}\nOn this server: ${serverTime}` },
-            { name: "Personal Bio", value: metrics.bio ?? "No bio set. Use `,setbio <text>` to add one." },
-            { name: "Level", value: `**${level} · ${title.emoji} ${title.name}** (${xp.toLocaleString()} XP)`, inline: true },
-            { name: "Server Statistics", value: `Words sent: **${metrics.wordsSent.toLocaleString()}**\nCommands used: **${metrics.commandsUsed.toLocaleString()}**\nEstimated voice time: **${formatDuration(metrics.voiceMinutes * 60_000)}**` },
-          )],
+          .setImage("attachment://status-card.png")],
+        files: [new AttachmentBuilder(card, { name: "status-card.png" })],
       });
       return;
     }
@@ -1196,6 +1606,35 @@ client.on(Events.AutoModerationActionExecution, (execution) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton() || !interaction.guild) return;
   try {
+    if (interaction.customId.startsWith("family:sibling:")) {
+      const [, , requestIdText, action] = interaction.customId.split(":");
+      const requestId = Number(requestIdText);
+      if (!Number.isInteger(requestId) || !["accept", "decline"].includes(action ?? "")) {
+        await interaction.reply({ content: "That family request is invalid.", ephemeral: true });
+        return;
+      }
+      const result = await database.respondToSiblingRequest(
+        interaction.guild.id,
+        requestId,
+        interaction.user.id,
+        action === "accept",
+      );
+      if (result === "not-target") {
+        await interaction.reply({ content: "Only the invited member can respond to this request.", ephemeral: true });
+        return;
+      }
+      if (result === "missing") {
+        await interaction.reply({ content: "This sibling request has already been answered or expired.", ephemeral: true });
+        return;
+      }
+      await interaction.reply({
+        content: result === "accepted" ? "Sibling request accepted!" : "Sibling request declined.",
+        ephemeral: true,
+      });
+      await interaction.message.edit({ components: [] }).catch(() => undefined);
+      return;
+    }
+
     if (interaction.customId === "giveaway:enter") {
       const giveaway = await database.getGiveaway(interaction.message.id);
       if (!giveaway || giveaway.status !== "active" || giveaway.endsAt <= Date.now()) {

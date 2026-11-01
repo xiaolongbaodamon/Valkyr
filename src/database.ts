@@ -39,6 +39,26 @@ export type DailyClaimResult = {
   bonusXp: number;
 };
 
+export type FamilyRelation = {
+  userId: string;
+  relation: "parent" | "child" | "sibling";
+  role?: string;
+};
+
+export type SiblingRequest = {
+  id: number;
+  guildId: string;
+  requesterId: string;
+  targetId: string;
+  requesterRole: string;
+};
+
+export type StatusCustomization = {
+  color: string;
+  font: "sans" | "serif" | "mono";
+  backgroundBase64: string | null;
+};
+
 function valueAsString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -121,6 +141,14 @@ export class Database {
         voice_minutes INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (guild_id, user_id)
       )`,
+      `CREATE TABLE IF NOT EXISTS status_customizations (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        color TEXT NOT NULL DEFAULT '#55c278',
+        font TEXT NOT NULL DEFAULT 'sans',
+        background_base64 TEXT,
+        PRIMARY KEY (guild_id, user_id)
+      )`,
       `CREATE TABLE IF NOT EXISTS alert_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         guild_id TEXT NOT NULL,
@@ -193,6 +221,40 @@ export class Database {
         user_id TEXT NOT NULL,
         year INTEGER NOT NULL,
         PRIMARY KEY (guild_id, user_id, year)
+      )`,
+      `CREATE TABLE IF NOT EXISTS family_parents (
+        guild_id TEXT NOT NULL,
+        parent_id TEXT NOT NULL,
+        child_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (guild_id, parent_id, child_id),
+        CHECK (parent_id != child_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS family_siblings (
+        guild_id TEXT NOT NULL,
+        user_a TEXT NOT NULL,
+        user_b TEXT NOT NULL,
+        role_a TEXT NOT NULL DEFAULT 'sibling',
+        role_b TEXT NOT NULL DEFAULT 'sibling',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (guild_id, user_a, user_b),
+        CHECK (user_a < user_b)
+      )`,
+      `CREATE TABLE IF NOT EXISTS family_sibling_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        requester_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        requester_role TEXT NOT NULL DEFAULT 'sibling',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (requester_id != target_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS family_names (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        family_name TEXT NOT NULL,
+        PRIMARY KEY (guild_id, user_id)
       )`,
     ];
     for (const statement of schema) await this.client.execute(statement);
@@ -570,6 +632,32 @@ export class Database {
     };
   }
 
+  async getStatusCustomization(guildId: string, userId: string): Promise<StatusCustomization> {
+    const result = await this.client.execute({
+      sql: "SELECT color, font, background_base64 FROM status_customizations WHERE guild_id = ? AND user_id = ?",
+      args: [guildId, userId],
+    });
+    const row = result.rows[0];
+    const font = valueAsString(row?.font);
+    return {
+      color: /^#[0-9a-f]{6}$/i.test(valueAsString(row?.color)) ? valueAsString(row?.color) : "#55c278",
+      font: font === "serif" || font === "mono" ? font : "sans",
+      backgroundBase64: typeof row?.background_base64 === "string" ? row.background_base64 : null,
+    };
+  }
+
+  async setStatusCustomization(guildId: string, userId: string, customization: StatusCustomization): Promise<void> {
+    await this.client.execute({
+      sql: `INSERT INTO status_customizations (guild_id, user_id, color, font, background_base64)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+          color = excluded.color,
+          font = excluded.font,
+          background_base64 = excluded.background_base64`,
+      args: [guildId, userId, customization.color, customization.font, customization.backgroundBase64],
+    });
+  }
+
   async getActivitySummary(guildId: string): Promise<ActivitySummary> {
     const since = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const [totals, members, daily] = await Promise.all([
@@ -778,6 +866,190 @@ export class Database {
     });
     const messageId = valueAsString(result.rows[0]?.message_id);
     return messageId ? this.getGiveaway(messageId) : undefined;
+  }
+
+  async addFamilyParent(guildId: string, parentId: string, childId: string): Promise<"added" | "already" | "limit" | "cycle"> {
+    if (parentId === childId) return "cycle";
+    const existing = await this.client.execute({
+      sql: "SELECT 1 FROM family_parents WHERE guild_id = ? AND parent_id = ? AND child_id = ?",
+      args: [guildId, parentId, childId],
+    });
+    if (existing.rows.length) return "already";
+    const parentCount = await this.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM family_parents WHERE guild_id = ? AND child_id = ?",
+      args: [guildId, childId],
+    });
+    if (valueAsNumber(parentCount.rows[0]?.count) >= 2) return "limit";
+    const ancestry = await this.client.execute({
+      sql: `WITH RECURSIVE ancestors(user_id) AS (
+          SELECT parent_id FROM family_parents WHERE guild_id = ? AND child_id = ?
+          UNION
+          SELECT family_parents.parent_id FROM family_parents
+            JOIN ancestors ON family_parents.child_id = ancestors.user_id
+            WHERE family_parents.guild_id = ?
+        )
+        SELECT 1 FROM ancestors WHERE user_id = ? LIMIT 1`,
+      args: [guildId, parentId, guildId, childId],
+    });
+    if (ancestry.rows.length) return "cycle";
+    await this.client.execute({
+      sql: "INSERT INTO family_parents (guild_id, parent_id, child_id) VALUES (?, ?, ?)",
+      args: [guildId, parentId, childId],
+    });
+    return "added";
+  }
+
+  async removeFamilyParent(guildId: string, parentId: string, childId: string): Promise<boolean> {
+    const result = await this.client.execute({
+      sql: "DELETE FROM family_parents WHERE guild_id = ? AND parent_id = ? AND child_id = ?",
+      args: [guildId, parentId, childId],
+    });
+    return result.rowsAffected > 0;
+  }
+
+  async getFamilyParents(guildId: string, childId: string): Promise<string[]> {
+    const result = await this.client.execute({
+      sql: "SELECT parent_id FROM family_parents WHERE guild_id = ? AND child_id = ?",
+      args: [guildId, childId],
+    });
+    return result.rows.map((row) => valueAsString(row.parent_id));
+  }
+
+  async getFamilyGraph(guildId: string): Promise<Array<{ fromId: string; toId: string; kind: "parent" | "child" | "sibling" }>> {
+    const [parents, siblings] = await Promise.all([
+      this.client.execute({ sql: "SELECT parent_id, child_id FROM family_parents WHERE guild_id = ?", args: [guildId] }),
+      this.client.execute({ sql: "SELECT user_a, user_b FROM family_siblings WHERE guild_id = ?", args: [guildId] }),
+    ]);
+    return [
+      ...parents.rows.flatMap((row) => {
+        const parentId = valueAsString(row.parent_id);
+        const childId = valueAsString(row.child_id);
+        return [
+          { fromId: parentId, toId: childId, kind: "parent" as const },
+          { fromId: childId, toId: parentId, kind: "child" as const },
+        ];
+      }),
+      ...siblings.rows.flatMap((row) => {
+        const userA = valueAsString(row.user_a);
+        const userB = valueAsString(row.user_b);
+        return [
+          { fromId: userA, toId: userB, kind: "sibling" as const },
+          { fromId: userB, toId: userA, kind: "sibling" as const },
+        ];
+      }),
+    ];
+  }
+
+  async setFamilyName(guildId: string, userIds: string[], familyName: string | null): Promise<void> {
+    const uniqueIds = [...new Set(userIds)];
+    if (!uniqueIds.length) return;
+    await this.client.batch(uniqueIds.map((userId) => ({
+      sql: familyName
+        ? `INSERT INTO family_names (guild_id, user_id, family_name) VALUES (?, ?, ?)
+          ON CONFLICT(guild_id, user_id) DO UPDATE SET family_name = excluded.family_name`
+        : "DELETE FROM family_names WHERE guild_id = ? AND user_id = ?",
+      args: familyName ? [guildId, userId, familyName] : [guildId, userId],
+    })), "write");
+  }
+
+  async getFamilyName(guildId: string, userId: string): Promise<string | undefined> {
+    const result = await this.client.execute({
+      sql: "SELECT family_name FROM family_names WHERE guild_id = ? AND user_id = ?",
+      args: [guildId, userId],
+    });
+    const name = valueAsString(result.rows[0]?.family_name);
+    return name || undefined;
+  }
+
+  async getFamilyRelations(guildId: string, userId: string): Promise<FamilyRelation[]> {
+    const [parents, children, siblings, sharedParents] = await Promise.all([
+      this.client.execute({ sql: "SELECT parent_id FROM family_parents WHERE guild_id = ? AND child_id = ?", args: [guildId, userId] }),
+      this.client.execute({ sql: "SELECT child_id FROM family_parents WHERE guild_id = ? AND parent_id = ?", args: [guildId, userId] }),
+      this.client.execute({
+        sql: "SELECT user_a, user_b, role_a, role_b FROM family_siblings WHERE guild_id = ? AND (user_a = ? OR user_b = ?)",
+        args: [guildId, userId, userId],
+      }),
+      this.client.execute({
+        sql: `SELECT DISTINCT other.child_id FROM family_parents mine
+          JOIN family_parents other ON mine.guild_id = other.guild_id AND mine.parent_id = other.parent_id
+          WHERE mine.guild_id = ? AND mine.child_id = ? AND other.child_id != ?`,
+        args: [guildId, userId, userId],
+      }),
+    ]);
+    const relations: FamilyRelation[] = [
+      ...parents.rows.map((row) => ({ userId: valueAsString(row.parent_id), relation: "parent" as const })),
+      ...children.rows.map((row) => ({ userId: valueAsString(row.child_id), relation: "child" as const })),
+    ];
+    const siblingRoles = new Map<string, string>();
+    for (const row of siblings.rows) {
+      const siblingId = valueAsString(row.user_a) === userId ? valueAsString(row.user_b) : valueAsString(row.user_a);
+      const role = valueAsString(row.user_a) === userId ? valueAsString(row.role_b) : valueAsString(row.role_a);
+      siblingRoles.set(siblingId, role);
+    }
+    for (const row of sharedParents.rows) {
+      const siblingId = valueAsString(row.child_id);
+      if (!siblingRoles.has(siblingId)) siblingRoles.set(siblingId, "sibling");
+    }
+    for (const [siblingId, role] of siblingRoles) relations.push({ userId: siblingId, relation: "sibling", role });
+    return relations;
+  }
+
+  async removeFamilySibling(guildId: string, userId: string, siblingId: string): Promise<boolean> {
+    const userA = userId < siblingId ? userId : siblingId;
+    const userB = userId < siblingId ? siblingId : userId;
+    const result = await this.client.execute({
+      sql: "DELETE FROM family_siblings WHERE guild_id = ? AND user_a = ? AND user_b = ?",
+      args: [guildId, userA, userB],
+    });
+    return result.rowsAffected > 0;
+  }
+
+  async createSiblingRequest(guildId: string, requesterId: string, targetId: string, requesterRole: string): Promise<number | undefined> {
+    const [pending, linked] = await Promise.all([
+      this.client.execute({
+        sql: "SELECT 1 FROM family_sibling_requests WHERE guild_id = ? AND requester_id = ? AND target_id = ? AND status = 'pending'",
+        args: [guildId, requesterId, targetId],
+      }),
+      this.client.execute({
+        sql: `SELECT 1 FROM family_siblings WHERE guild_id = ? AND (
+          (user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?)
+        )`,
+        args: [guildId, requesterId < targetId ? requesterId : targetId, requesterId < targetId ? targetId : requesterId,
+          requesterId < targetId ? targetId : requesterId, requesterId < targetId ? requesterId : targetId],
+      }),
+    ]);
+    if (pending.rows.length || linked.rows.length) return undefined;
+    const result = await this.client.execute({
+      sql: "INSERT INTO family_sibling_requests (guild_id, requester_id, target_id, requester_role) VALUES (?, ?, ?, ?) RETURNING id",
+      args: [guildId, requesterId, targetId, requesterRole],
+    });
+    return valueAsNumber(result.rows[0]?.id) || undefined;
+  }
+
+  async respondToSiblingRequest(guildId: string, requestId: number, targetId: string, accept: boolean): Promise<"accepted" | "declined" | "missing" | "not-target"> {
+    const result = await this.client.execute({
+      sql: "SELECT requester_id, target_id, requester_role FROM family_sibling_requests WHERE id = ? AND guild_id = ? AND status = 'pending'",
+      args: [requestId, guildId],
+    });
+    const row = result.rows[0];
+    if (!row) return "missing";
+    if (valueAsString(row.target_id) !== targetId) return "not-target";
+    const newStatus = accept ? "accepted" : "declined";
+    const updated = await this.client.execute({
+      sql: "UPDATE family_sibling_requests SET status = ? WHERE id = ? AND guild_id = ? AND status = 'pending'",
+      args: [newStatus, requestId, guildId],
+    });
+    if (!updated.rowsAffected) return "missing";
+    if (!accept) return "declined";
+    const requesterId = valueAsString(row.requester_id);
+    const requesterRole = valueAsString(row.requester_role);
+    const roleA = requesterId < targetId ? requesterRole : (requesterRole === "brother" ? "sister" : requesterRole === "sister" ? "brother" : "sibling");
+    const roleB = requesterId < targetId ? (requesterRole === "brother" ? "sister" : requesterRole === "sister" ? "brother" : "sibling") : requesterRole;
+    await this.client.execute({
+      sql: "INSERT OR IGNORE INTO family_siblings (guild_id, user_a, user_b, role_a, role_b) VALUES (?, ?, ?, ?, ?)",
+      args: [guildId, requesterId < targetId ? requesterId : targetId, requesterId < targetId ? targetId : requesterId, roleA, roleB],
+    });
+    return "accepted";
   }
 
   async close(): Promise<void> {
