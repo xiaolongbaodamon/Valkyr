@@ -290,32 +290,26 @@ async function handleCommand(message: Message): Promise<void> {
     }
     if (command === "help") {
       await loadBotOwnerIds();
-      const canSeeModerationCommands = botOwnerIds.has(message.author.id)
+      const canSeeAdminCommands = botOwnerIds.has(message.author.id)
         || message.guild.ownerId === message.author.id
         || hasPermission(message, PermissionsBitField.Flags.Administrator);
       const sections = [{
         name: "Member commands",
         value: memberCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
       }];
-      if (hasPermission(message, PermissionsBitField.Flags.ManageGuild)) {
+      if (canSeeAdminCommands) {
         sections.push({
           name: "Server management commands",
           value: serverManagementCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
         });
-      }
-      if (hasPermission(message, PermissionsBitField.Flags.ManageRoles)) {
         sections.push({
           name: "Role management commands",
           value: roleManagementCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
         });
-      }
-      if (hasPermission(message, PermissionsBitField.Flags.ManageChannels)) {
         sections.push({
           name: "Channel management commands",
           value: channelManagementCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),
         });
-      }
-      if (canSeeModerationCommands) {
         sections.push({
           name: "Moderation commands",
           value: moderationCommands.map((entry) => `\`${PREFIX}${entry}\``).join("\n"),

@@ -22,7 +22,7 @@ The bot creates its tables in Turso at startup. Keep the database URL and auth t
 
 ## Commands
 
-All commands start with a comma. `,help` shows member commands to everyone and reveals server, role, and channel setup sections only to members with the matching permissions. The moderation section is restricted to the bot owner, server owner, and administrators. Commands also enforce their required Discord permissions when run.
+All commands start with a comma. `,help` shows member commands to everyone; only the bot owner, server owner, and administrators see server, role, channel, and moderation sections. Commands still enforce their required Discord permissions when run.
 
 | Command | Purpose |
 | --- | --- |
@@ -52,5 +52,7 @@ All commands start with a comma. `,help` shows member commands to everyone and r
 | `,alerts add twitch|kick <channel>` | Monitor a Twitch or Kick channel for live sessions |
 | `,alerts add youtube <channel-id>` | Monitor a YouTube channel ID (starts with `UC`) for new uploads |
 | `,alerts list`, `,alerts remove <id>` | Manage notification sources |
+
+Twitch alerts use `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` from the process environment and include the live title, category, viewer count, start time, preview image, and link. Save the variables in Wispbyte and restart the bot after updating them.
 
 Birthday announcements are sent at midnight UTC and use `BIRTHDAY_GIF_URL` for the animated image (the default is a public GIPHY GIF). Daily claims give 50 XP every 24 hours; a gap of 48 hours or more resets the streak. Each milestone bonus is awarded once per member, even if they later rebuild a streak. Reputation has a 24-hour per-giver cooldown. Channel lock/unlock commands are only listed for the bot owner, server owner, and administrators; those same users can run them. Other moderation commands retain their individual Discord permission checks. Alerts are checked every two minutes. Twitch alerts require `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET`; YouTube alerts announce new feed uploads. The 30-day activity summary tracks messages, joins, leaves, voice minutes, and active members. Member word and command totals begin when the bot is installed; voice time is an estimate based on tracked voice sessions and is not retroactive across bot downtime. For Wispbyte, select Node.js 20 or newer, set the startup command to `npm start`, and add `BOT_TOKEN`, `TURSO_DATABASE_URL`, and `TURSO_AUTH_TOKEN` as environment variables in the panel. Add Twitch credentials there if Twitch alerts are needed. The bot needs **View Channel**, **Send Messages**, **Embed Links**, and the relevant role/channel management permissions in Discord.

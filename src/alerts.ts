@@ -7,6 +7,18 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
 let twitchAccessToken = "";
 let twitchTokenExpiresAt = 0;
 
+type AlertEvent = {
+  event: string;
+  live: boolean;
+  title?: string;
+  channelName?: string;
+  category?: string;
+  viewerCount?: number;
+  startedAt?: Date;
+  thumbnailUrl?: string;
+  url?: string;
+};
+
 async function twitchToken(): Promise<string> {
   if (twitchAccessToken && Date.now() < twitchTokenExpiresAt) return twitchAccessToken;
   const url = new URL("https://id.twitch.tv/oauth2/token");
@@ -21,18 +33,39 @@ async function twitchToken(): Promise<string> {
   return twitchAccessToken;
 }
 
-async function getEvent(source: AlertSource): Promise<{ event: string; live: boolean; title?: string } | undefined> {
+async function getEvent(source: AlertSource): Promise<AlertEvent | undefined> {
   if (source.platform === "twitch") {
     if (!config.twitchClientId || !config.twitchClientSecret) return undefined;
     const response = await fetch(`https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(source.source_key)}`, {
       headers: { "Client-Id": config.twitchClientId, Authorization: `Bearer ${await twitchToken()}` },
     });
     if (!response.ok) throw new Error(`Twitch API request failed: ${response.status}`);
-    const data = (await response.json()) as { data: Array<{ id: string; title: string; user_name: string }> };
+    const data = (await response.json()) as {
+      data: Array<{
+        id: string;
+        title: string;
+        user_name: string;
+        user_login: string;
+        game_name: string;
+        viewer_count: number;
+        started_at: string;
+        thumbnail_url: string;
+      }>;
+    };
     const stream = data.data[0];
-    return stream
-      ? { event: stream.id, live: true, title: `${stream.user_name}: ${stream.title}` }
-      : { event: "", live: false };
+    if (!stream) return { event: "", live: false };
+    const login = stream.user_login || source.source_key;
+    return {
+      event: stream.id,
+      live: true,
+      title: stream.title,
+      channelName: stream.user_name,
+      category: stream.game_name,
+      viewerCount: stream.viewer_count,
+      startedAt: new Date(stream.started_at),
+      thumbnailUrl: stream.thumbnail_url.replace("{width}", "1280").replace("{height}", "720"),
+      url: `https://www.twitch.tv/${encodeURIComponent(login)}`,
+    };
   }
 
   if (source.platform === "kick") {
@@ -77,9 +110,25 @@ export function startAlertPolling(client: Client, database: Database): void {
           if (typeof channelId === "string") {
             const channel = await client.channels.fetch(channelId).catch(() => null);
             if (channel?.isSendable()) {
-              await channel.send({
-                embeds: [new EmbedBuilder().setColor(0x55c278).setDescription(event.title ?? `${source.source_key} is live!`)],
-              });
+              if (source.platform === "twitch" && event.live && event.url) {
+                const embed = new EmbedBuilder()
+                  .setColor(0x9146ff)
+                  .setAuthor({ name: `${event.channelName ?? source.source_key} is live on Twitch`, url: event.url })
+                  .setTitle(event.title || "Live now")
+                  .setURL(event.url)
+                  .setDescription(`Playing **${event.category || "a game or category"}**\n**${event.viewerCount?.toLocaleString() ?? "?"}** viewers`)
+                  .setFooter({ text: "Watch live on Twitch" });
+                if (event.thumbnailUrl) embed.setImage(event.thumbnailUrl);
+                if (event.startedAt && !Number.isNaN(event.startedAt.getTime())) embed.setTimestamp(event.startedAt);
+                await channel.send({
+                  content: `🔴 **${event.channelName ?? source.source_key} is live!**`,
+                  embeds: [embed],
+                });
+              } else {
+                await channel.send({
+                  embeds: [new EmbedBuilder().setColor(0x55c278).setDescription(event.title ?? `${source.source_key} is live!`)],
+                });
+              }
             }
           }
         }
